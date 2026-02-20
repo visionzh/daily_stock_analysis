@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from json_repair import repair_json
+import pandas as pd  # 新增：导入pandas
 
 from src.config import get_config
 
@@ -1062,6 +1063,25 @@ class GeminiAnalyzer:
             )
         
         try:
+            # ===================== 自定义尾盘分析 - 开始 =====================
+            # 1. 尝试从 context 中获取分时数据 (minute_data)
+            minute_data = context.get('realtime', {}).get('minute_data', pd.DataFrame())
+            closing_analysis_result = ""
+
+            if not minute_data.empty and '成交量' in minute_data.columns and '收盘' in minute_data.columns:
+                # 调用自定义分析函数
+                closing_analysis_result = self._custom_closing_analysis(code, minute_data, context)
+            else:
+                logger.warning(f"[{code}] 分时数据缺失或格式异常，跳过尾盘分析")
+                closing_analysis_result = "⚠️ 分时数据缺失，无法进行尾盘分析。"
+
+            # 2. 将尾盘分析结果存入 context，传递给 Prompt 构建函数
+            # 使用一个独特的键，避免与原有数据冲突
+            context['custom_analysis'] = {
+                'closing_30m_report': closing_analysis_result
+            }
+            # ===================== 自定义尾盘分析 - 结束 =====================
+
             # 格式化输入（包含技术面数据和新闻）
             prompt = self._format_prompt(context, name, news_context)
             
@@ -1134,7 +1154,79 @@ class GeminiAnalyzer:
                 success=False,
                 error_message=str(e),
             )
+
+    def _custom_closing_analysis(self, stock_code: str, minute_data: pd.DataFrame, context: Dict[str, Any]) -> str:
+        """
+        执行自定义尾盘30分钟深度分析：量比、分时形态、炸板判断
+        """
+        closing_minutes = 30
+        # 取最后 N 分钟数据
+        closing_df = minute_data.tail(closing_minutes)
+        total_minutes = len(minute_data)
     
+        if total_minutes < closing_minutes:
+            return f"⚠️ 分时数据不足{closing_minutes}分钟，分析终止。"
+
+        # 1. 尾盘量比分析
+        closing_volume = closing_df["成交量"].sum()
+        avg_volume_per_min = minute_data["成交量"].sum() / total_minutes
+        closing_volume_ratio = (closing_volume / closing_minutes) / avg_volume_per_min if avg_volume_per_min != 0 else 0
+
+        if closing_volume_ratio > 2.0:
+            vol_conclusion = f"🔥 量比{closing_volume_ratio:.2f}，显著放量突破，资金抢筹迹象明显。"
+        elif closing_volume_ratio < 0.5:
+            vol_conclusion = f"❄️ 量比{closing_volume_ratio:.2f}，缩量拉升，谨防诱多出货。"
+        else:
+            vol_conclusion = f"📊 量比{closing_volume_ratio:.2f}，量能平稳，无明显异动。"
+
+        # 2. 尾盘分时形态分析
+        closing_price_series = closing_df["收盘"]
+        # 计算尾盘价格的波动幅度
+        price_fluctuation = (closing_price_series.max() - closing_price_series.min()) / closing_price_series.iloc[0]
+        # 计算尾盘最终涨跌幅
+        closing_return = (closing_price_series.iloc[-1] - closing_price_series.iloc[0]) / closing_price_series.iloc[0]
+
+        if price_fluctuation < 0.005 and closing_return > 0.002:
+            pattern_conclusion = "📈 稳涨形态：价格平稳推升，走势健康。"
+        elif price_fluctuation > 0.015 and closing_price_series.iloc[-1] < closing_price_series.max() * 0.995:
+            pattern_conclusion = "⚠️ 尖角波形态：冲高回落，尾盘抛压较重。"
+        else:
+            pattern_conclusion = "⚖️ 震荡形态：无明显趋势，多空平衡。"
+
+        # 3. 炸板判断（需要涨停价）
+        limit_up_price = context.get('realtime', {}).get('limit_up_price')
+        board_conclusion = "🔍 未获取涨停价，跳过炸板判断。"
+    
+        if limit_up_price:
+            # 检查是否曾经触及涨停
+            has_hit_limit = minute_data["收盘"].max() >= limit_up_price * 0.998  # 允许微小误差
+            # 检查最后5分钟是否在涨停价之下
+            last_5_close = minute_data.tail(5)["收盘"].max()
+            is_board_broken = has_hit_limit and (last_5_close < limit_up_price * 0.998)
+        
+            if is_board_broken:
+                board_conclusion = "❌ 【炸板警报】：尾盘涨停板被打开，资金出逃风险极大！"
+            elif has_hit_limit:
+                board_conclusion = "✅ 【封板成功】：涨停板封单稳定，尾盘无松动。"
+            else:
+                board_conclusion = "ℹ️ 未触及涨停，无炸板风险。"
+
+        # 4. 组装最终报告
+        final_report = f"""
+### 🕒 尾盘{closing_minutes}分钟量化监控（高优先级）
+**1. 量能异动**：{vol_conclusion}
+**2. 分时形态**：{pattern_conclusion}
+**3. 封板状态**：{board_conclusion}
+
+📝 **量化结论**：
+{
+    "🚀 强烈看多" if (closing_volume_ratio > 1.8 and "稳涨" in pattern_conclusion) 
+    else "🩸 极度危险" if ("炸板" in board_conclusion or "尖角波" in pattern_conclusion)
+    else "➡️ 中性观望"
+}
+"""
+        return final_report
+
     def _format_prompt(
         self, 
         context: Dict[str, Any], 
@@ -1250,6 +1342,14 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
+
+        # 新增：尾盘30分钟量化分析模块（高优先级）
+        if context.get('custom_analysis') and context['custom_analysis'].get('closing_30m_report'):
+            prompt += f"""
+### 🚨 尾盘30分钟量化监控（最高优先级）
+{context['custom_analysis']['closing_30m_report']}
+> 注：本模块数据基于分时量价实时计算，包含量能异动、分时形态、炸板判断，是短期操作的核心决策依据，优先级高于普通量比分析。
+"""
         
         # 添加昨日对比数据
         if 'yesterday' in context:
@@ -1308,13 +1408,15 @@ class GeminiAnalyzer:
 3. ❓ 量能是否配合（缩量回调/放量突破）？
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
+6. ❓ 尾盘30分钟是否出现炸板、缩量诱多或尖角波回落？—— 若出现直接判定为高风险  # 新增
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
-- **核心结论**：一句话说清该买/该卖/该等
-- **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
+- **核心结论**：一句话说清该买/该卖/该等，若尾盘有高风险信号需优先体现  # 新增
+- **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做（尾盘风险信号需明确给出"立即卖出"或"坚决观望"）  # 新增
 - **具体狙击点位**：买入价、止损价、目标价（精确到分）
-- **检查清单**：每项用 ✅/⚠️/❌ 标记
+- **检查清单**：新增"尾盘风险排查"项，用 ✅（无风险）/⚠️（需警惕）/❌（高风险）标记  # 新增
+- **风险警告**：若尾盘出现炸板、诱多信号，需在风险警告中置顶标注  # 新增
 
 请输出完整的 JSON 格式决策仪表盘。"""
         
