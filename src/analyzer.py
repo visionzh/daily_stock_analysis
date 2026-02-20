@@ -1157,70 +1157,80 @@ class GeminiAnalyzer:
 
     def _custom_closing_analysis(self, stock_code: str, minute_data: pd.DataFrame, context: Dict[str, Any]) -> str:
         """
-        执行自定义尾盘30分钟深度分析：量比、分时形态、炸板判断
+        执行自定义尾盘20分钟（14:30-14:50）深度分析：量比、分时形态、炸板判断
+        聚焦主力试盘/建仓/出货核心时段，排除集合竞价干扰
         """
-        closing_minutes = 30
-        # 取最后 N 分钟数据
-        closing_df = minute_data.tail(closing_minutes)
-        total_minutes = len(minute_data)
-    
-        if total_minutes < closing_minutes:
-            return f"⚠️ 分时数据不足{closing_minutes}分钟，分析终止。"
+        closing_minutes = 20
+        target_period = "14:30-14:50"
 
-        # 1. 尾盘量比分析
+        # 精准筛选14:30-14:50数据（优先按时间列，次按索引）
+        if '时间' in minute_data.columns:
+            closing_df = minute_data[
+                (minute_data['时间'] >= '14:30') & 
+                (minute_data['时间'] <= '14:50')
+            ]
+        elif isinstance(minute_data.index, pd.DatetimeIndex):
+            closing_df = minute_data.between_time('14:30:00', '14:50:00')
+        else:
+            # 兼容无时间索引的情况（取倒数20分钟，需确保数据完整）
+            closing_df = minute_data.tail(closing_minutes)
+            logger.warning(f"[{code}] 分时数据无时间索引，默认取最后{closing_minutes}分钟（可能包含集合竞价）")
+
+        # 严格校验数据量
+        if len(closing_df) < closing_minutes:
+            return f"⚠️ {target_period}分时数据不足{closing_minutes}分钟（仅{len(closing_df)}分钟），分析终止。"
+
+        # 1. 尾盘量比分析（逻辑不变，基于20分钟数据）
         closing_volume = closing_df["成交量"].sum()
-        avg_volume_per_min = minute_data["成交量"].sum() / total_minutes
+        avg_volume_per_min = minute_data["成交量"].sum() / len(minute_data)
         closing_volume_ratio = (closing_volume / closing_minutes) / avg_volume_per_min if avg_volume_per_min != 0 else 0
 
-        if closing_volume_ratio > 2.0:
-            vol_conclusion = f"🔥 量比{closing_volume_ratio:.2f}，显著放量突破，资金抢筹迹象明显。"
-        elif closing_volume_ratio < 0.5:
-            vol_conclusion = f"❄️ 量比{closing_volume_ratio:.2f}，缩量拉升，谨防诱多出货。"
+        if closing_volume_ratio > 2.5:  # 20分钟更敏感，阈值可略提高
+            vol_conclusion = f"🔥 量比{closing_volume_ratio:.2f}，14:30后显著放量，主力抢筹迹象极强。"
+        elif closing_volume_ratio < 0.4:
+            vol_conclusion = f"❄️ 量比{closing_volume_ratio:.2f}，14:30后缩量，谨防诱多或无人接盘。"
         else:
-            vol_conclusion = f"📊 量比{closing_volume_ratio:.2f}，量能平稳，无明显异动。"
+            vol_conclusion = f"📊 量比{closing_volume_ratio:.2f}，14:30后量能平稳，无明显主力异动。"
 
-        # 2. 尾盘分时形态分析
+        # 2. 尾盘分时形态分析（逻辑不变）
         closing_price_series = closing_df["收盘"]
-        # 计算尾盘价格的波动幅度
         price_fluctuation = (closing_price_series.max() - closing_price_series.min()) / closing_price_series.iloc[0]
-        # 计算尾盘最终涨跌幅
         closing_return = (closing_price_series.iloc[-1] - closing_price_series.iloc[0]) / closing_price_series.iloc[0]
 
-        if price_fluctuation < 0.005 and closing_return > 0.002:
-            pattern_conclusion = "📈 稳涨形态：价格平稳推升，走势健康。"
-        elif price_fluctuation > 0.015 and closing_price_series.iloc[-1] < closing_price_series.max() * 0.995:
-            pattern_conclusion = "⚠️ 尖角波形态：冲高回落，尾盘抛压较重。"
+        if price_fluctuation < 0.004 and closing_return > 0.0025:
+            pattern_conclusion = "📈 稳涨形态：14:30后平稳推升，主力控盘能力强。"
+        elif price_fluctuation > 0.012 and closing_price_series.iloc[-1] < closing_price_series.max() * 0.995:
+            pattern_conclusion = "⚠️ 尖角波形态：14:30后冲高回落，抛压集中释放。"
         else:
-            pattern_conclusion = "⚖️ 震荡形态：无明显趋势，多空平衡。"
+            pattern_conclusion = "⚖️ 震荡形态：14:30后无明显趋势，多空暂时平衡。"
 
-        # 3. 炸板判断（需要涨停价）
+        # 3. 炸板判断（逻辑不变，聚焦14:30-14:50是否炸板）
         limit_up_price = context.get('realtime', {}).get('limit_up_price')
         board_conclusion = "🔍 未获取涨停价，跳过炸板判断。"
     
         if limit_up_price:
-            # 检查是否曾经触及涨停
-            has_hit_limit = minute_data["收盘"].max() >= limit_up_price * 0.998  # 允许微小误差
-            # 检查最后5分钟是否在涨停价之下
-            last_5_close = minute_data.tail(5)["收盘"].max()
-            is_board_broken = has_hit_limit and (last_5_close < limit_up_price * 0.998)
+            # 检查14:30前是否触及涨停，14:30-14:50是否炸板
+            has_hit_limit_before = minute_data[minute_data['时间'] < '14:30']['收盘'].max() >= limit_up_price * 0.998
+            last_20_close_max = closing_df["收盘"].max()
+            is_board_broken = has_hit_limit_before and (last_20_close_max < limit_up_price * 0.998)
         
             if is_board_broken:
-                board_conclusion = "❌ 【炸板警报】：尾盘涨停板被打开，资金出逃风险极大！"
-            elif has_hit_limit:
-                board_conclusion = "✅ 【封板成功】：涨停板封单稳定，尾盘无松动。"
+                board_conclusion = "❌ 【炸板警报】：14:30后涨停板被打开，主力出逃风险极大！"
+            elif has_hit_limit_before:
+                board_conclusion = "✅ 【封板稳定】：14:30后涨停板未松动，封单可靠。"
             else:
                 board_conclusion = "ℹ️ 未触及涨停，无炸板风险。"
 
-        # 4. 组装最终报告
+        # 4. 组装最终报告（更新标题）
         final_report = f"""
-### 🕒 尾盘{closing_minutes}分钟量化监控（高优先级）
+### 🕒 尾盘{closing_minutes}分钟量化监控（{target_period}，高优先级）
 **1. 量能异动**：{vol_conclusion}
 **2. 分时形态**：{pattern_conclusion}
 **3. 封板状态**：{board_conclusion}
 
 📝 **量化结论**：
 {
-    "🚀 强烈看多" if (closing_volume_ratio > 1.8 and "稳涨" in pattern_conclusion) 
+    "🚀 强烈看多" if (closing_volume_ratio > 2.2 and "稳涨" in pattern_conclusion) 
     else "🩸 极度危险" if ("炸板" in board_conclusion or "尖角波" in pattern_conclusion)
     else "➡️ 中性观望"
 }
@@ -1346,9 +1356,9 @@ class GeminiAnalyzer:
         # 新增：尾盘30分钟量化分析模块（高优先级）
         if context.get('custom_analysis') and context['custom_analysis'].get('closing_30m_report'):
             prompt += f"""
-### 🚨 尾盘30分钟量化监控（最高优先级）
+### 🚨 尾盘20分钟量化监控（14:30-14:50，最高优先级）  # 核心修改
 {context['custom_analysis']['closing_30m_report']}
-> 注：本模块数据基于分时量价实时计算，包含量能异动、分时形态、炸板判断，是短期操作的核心决策依据，优先级高于普通量比分析。
+> 注：本模块聚焦14:30-14:50主力动作时段，包含量能异动、分时形态、炸板判断，优先级高于普通量比分析。
 """
         
         # 添加昨日对比数据
@@ -1408,7 +1418,7 @@ class GeminiAnalyzer:
 3. ❓ 量能是否配合（缩量回调/放量突破）？
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
-6. ❓ 尾盘30分钟是否出现炸板、缩量诱多或尖角波回落？—— 若出现直接判定为高风险  # 新增
+6. ❓ 尾盘20分钟（14:30-14:50）是否出现炸板、缩量诱多或尖角波回落？—— 若出现直接判定为高风险  # 新增
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
