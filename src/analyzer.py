@@ -411,106 +411,206 @@ class GeminiAnalyzer:
 
 请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】："""
 
-```json
+    JSON_FORMAT_PROMPT = """
+输出JSON结构如下：
 {
-    "stock_name": "股票中文名称",
-    "sentiment_score": 0-100整数,
+    "stock_name": "股票名称",
+    "sentiment_score": 0-100,
     "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
     "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
     "decision_type": "buy/hold/sell",
     "confidence_level": "高/中/低",
-
     "dashboard": {
         "core_conclusion": {
-            "one_sentence": "一句话核心结论（30字以内，直接告诉用户做什么）",
-            "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
+            "one_sentence": "一句话结论",
+            "signal_type": "🟢买入/🟡观望/🔴卖出/⚠️风险",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {
-                "no_position": "空仓者建议：具体操作指引",
-                "has_position": "持仓者建议：具体操作指引"
+                "no_position": "空仓建议",
+                "has_position": "持仓建议"
             }
         },
-
         "data_perspective": {
             "trend_status": {
-                "ma_alignment": "均线排列状态描述",
+                "ma_alignment": "均线描述",
                 "is_bullish": true/false,
                 "trend_score": 0-100
             },
             "price_position": {
-                "current_price": 当前价格数值,
-                "ma5": MA5数值,
-                "ma10": MA10数值,
-                "ma20": MA20数值,
-                "bias_ma5": 乖离率百分比数值,
+                "current_price": 0,
+                "ma5": 0,
+                "ma10": 0,
+                "ma20": 0,
+                "bias_ma5": 0,
                 "bias_status": "安全/警戒/危险",
-                "support_level": 支撑位价格,
-                "resistance_level": 压力位价格
+                "support_level": 0,
+                "resistance_level": 0
             },
             "volume_analysis": {
-                "volume_ratio": 量比数值,
+                "volume_ratio": 0,
                 "volume_status": "放量/缩量/平量",
-                "turnover_rate": 换手率百分比,
-                "volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"
+                "turnover_rate": 0,
+                "volume_meaning": ""
             },
             "chip_structure": {
-                "profit_ratio": 获利比例,
-                "avg_cost": 平均成本,
-                "concentration": 筹码集中度,
+                "profit_ratio": 0,
+                "avg_cost": 0,
+                "concentration": 0,
                 "chip_health": "健康/一般/警惕"
             }
         },
-
         "intelligence": {
-            "latest_news": "【最新消息】近期重要新闻摘要",
-            "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述"],
-            "positive_catalysts": ["利好1：具体描述", "利好2：具体描述"],
-            "earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）",
-            "sentiment_summary": "舆情情绪一句话总结"
+            "latest_news": "",
+            "risk_alerts": [],
+            "positive_catalysts": [],
+            "earnings_outlook": "",
+            "sentiment_summary": ""
         },
-
         "battle_plan": {
             "sniper_points": {
-                "ideal_buy": "理想买入点：XX元（在MA5附近）",
-                "secondary_buy": "次优买入点：XX元（在MA10附近）",
-                "stop_loss": "止损位：XX元（跌破MA20或X%）",
-                "take_profit": "目标位：XX元（前高/整数关口）"
+                "ideal_buy": "",
+                "secondary_buy": "",
+                "stop_loss": "",
+                "take_profit": ""
             },
             "position_strategy": {
-                "suggested_position": "建议仓位：X成",
-                "entry_plan": "分批建仓策略描述",
-                "risk_control": "风控策略描述"
+                "suggested_position": "",
+                "entry_plan": "",
+                "risk_control": ""
             },
-            "action_checklist": [
-                "✅/⚠️/❌ 检查项1：多头排列",
-                "✅/⚠️/❌ 检查项2：乖离率合理（强势趋势可放宽）",
-                "✅/⚠️/❌ 检查项3：量能配合",
-                "✅/⚠️/❌ 检查项4：无重大利空",
-                "✅/⚠️/❌ 检查项5：筹码健康",
-                "✅/⚠️/❌ 检查项6：PE估值合理"
-            ]
+            "action_checklist": []
         }
     },
-
-    "analysis_summary": "100字综合分析摘要",
-    "key_points": "3-5个核心看点，逗号分隔",
-    "risk_warning": "风险提示",
-    "buy_reason": "操作理由，引用交易理念",
-
-    "trend_analysis": "走势形态分析",
-    "short_term_outlook": "短期1-3日展望",
-    "medium_term_outlook": "中期1-2周展望",
-    "technical_analysis": "技术面综合分析",
-    "ma_analysis": "均线系统分析",
-    "volume_analysis": "量能分析",
-    "pattern_analysis": "K线形态分析",
-    "fundamental_analysis": "基本面分析",
-    "sector_position": "板块行业分析",
-    "company_highlights": "公司亮点/风险",
-    "news_summary": "新闻摘要",
-    "market_sentiment": "市场情绪",
-    "hot_topics": "相关热点",
-
+    "analysis_summary": "",
+    "key_points": "",
+    "risk_warning": "",
+    "buy_reason": "",
+    "trend_analysis": "",
+    "short_term_outlook": "",
+    "medium_term_outlook": "",
+    "technical_analysis": "",
+    "ma_analysis": "",
+    "volume_analysis": "",
+    "pattern_analysis": "",
+    "fundamental_analysis": "",
+    "sector_position": "",
+    "company_highlights": "",
+    "news_summary": "",
+    "market_sentiment": "",
+    "hot_topics": "",
     "search_performed": true/false,
-    "data_sources": "数据来源说明"
+    "data_sources": ""
 }
+"""
+
+    def __init__(self):
+        self.config = get_config()
+        self.model = None
+
+    def analyze(self, context: Dict, news_context: Optional[List] = None) -> AnalysisResult:
+        """
+        执行AI分析
+        """
+        stock_code = context.get('code', '')
+        stock_name = get_stock_name_multi_source(stock_code, context=context)
+
+        try:
+            # === 这里接入你的Gemini调用逻辑 ===
+            # response = self.model.generate_content(...)
+            # raw = response.text
+
+            raw = "{}"  # 模拟返回
+            fixed_json = repair_json(raw)
+            data = json.loads(fixed_json)
+
+            # 构造结果
+            res = AnalysisResult(
+                code=stock_code,
+                name=stock_name,
+                sentiment_score=data.get('sentiment_score', 50),
+                trend_prediction=data.get('trend_prediction', '震荡'),
+                operation_advice=data.get('operation_advice', '观望'),
+                decision_type=data.get('decision_type', 'hold'),
+                confidence_level=data.get('confidence_level', '中'),
+                dashboard=data.get('dashboard'),
+                analysis_summary=data.get('analysis_summary', ''),
+                key_points=data.get('key_points', ''),
+                risk_warning=data.get('risk_warning', ''),
+                buy_reason=data.get('buy_reason', ''),
+                raw_response=raw,
+                search_performed=bool(news_context),
+            )
+            return res
+
+        except Exception as e:
+            logger.error(f"分析失败: {e}")
+            return AnalysisResult(
+                code=stock_code,
+                name=stock_name,
+                success=False,
+                error_message=str(e)
+            )
+
+    def midday_stock_pick(self, stock_contexts: List[Dict]) -> List[MiddayStockPickResult]:
+        """
+        午盘选股（11:00前执行）
+        基于技术面多头、乖离率、量能、筹码筛选
+        """
+        results = []
+        for ctx in stock_contexts:
+            code = ctx.get('code', '')
+            name = get_stock_name_multi_source(code, context=ctx)
+            realtime = ctx.get('realtime', {})
+            tech = ctx.get('technical', {})
+
+            # 简单打分示例
+            score = 50
+            reason = []
+            buy_signal = "观望"
+
+            # 多头排列
+            ma5 = tech.get('ma5', 0)
+            ma10 = tech.get('ma10', 0)
+            ma20 = tech.get('ma20', 0)
+            is_bullish = ma5 > ma10 > ma20
+
+            if is_bullish:
+                score += 25
+                reason.append("均线多头排列")
+
+            # 乖离率
+            price = realtime.get('price', 0)
+            if price and ma5:
+                bias = (price - ma5) / ma5 * 100
+                if bias < 2:
+                    score += 15
+                    reason.append("乖离率低，适合低吸")
+                elif bias > 5:
+                    score -= 20
+
+            # 量能
+            vr = tech.get('volume_ratio', 1)
+            if 0.8 < vr < 1.5:
+                score += 10
+                reason.append("量能健康")
+
+            # 最终信号
+            if score >= 75:
+                buy_signal = "强烈买入"
+            elif score >= 60:
+                buy_signal = "买入"
+            elif score <= 30:
+                buy_signal = "回避"
+
+            results.append(MiddayStockPickResult(
+                code=code,
+                name=name,
+                score=score,
+                reason=reason,
+                buy_signal=buy_signal,
+                technical_data=tech
+            ))
+
+        # 按分数排序
+        results.sort(key=lambda x: x.score, reverse=True)
+        return results
